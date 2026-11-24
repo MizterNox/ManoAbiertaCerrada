@@ -3,68 +3,331 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mi Modelo de Teachable Machine</title>
-    <!-- Librerías de TensorFlow.js y Teachable Machine -->
+    <title>Detector de Mano - Teachable Machine</title>
+
+    <!-- Librerías necesarias para ejecutar el modelo de Teachable Machine en el navegador -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
 
+    <!-- Hoja de estilos separada para mantener el HTML limpio y ordenado -->
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-    <h2>Clasificador de Imágenes - Teachable Machine</h2>
-    <button type="button" onclick="init()">Start (Iniciar Cámara)</button>
-    
-    <div id="webcam-container"></div>
-    <div id="label-container"></div>
+    <!-- Contenedor principal tipo tarjeta para centrar la aplicación y adaptarla a móviles y escritorio -->
+    <main class="app-card">
+
+        <!-- Encabezado con el título e indicador de estado EN VIVO para dar feedback visual de la cámara -->
+        <header class="app-header">
+            <div class="title-group">
+                <!-- Icono SVG de cámara/visión para reforzar visualmente el propósito de la app -->
+                <svg class="icon-brand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                    <circle cx="12" cy="13" r="4"></circle>
+                </svg>
+                <div>
+                    <h1>Clasificador de Imágenes</h1>
+                    <p class="subtitle">Detección en tiempo real con TensorFlow.js</p>
+                </div>
+            </div>
+
+            <!-- Insignia de estado EN VIVO: se ilumina cuando la cámara está activa -->
+            <div id="live-badge" class="live-badge" aria-live="polite">
+                <span class="live-dot"></span>
+                <span id="live-text">Inactivo</span>
+            </div>
+        </header>
+
+        <!-- Marco del visor de cámara: cambia de color según la confianza de la detección -->
+        <section id="camera-frame" class="camera-frame">
+            <!-- Contenedor donde Teachable Machine inserta el <canvas> del video -->
+            <div id="webcam-container" class="webcam-container"></div>
+
+            <!-- Estado vacío/inicial: se muestra antes de encender la cámara para evitar un espacio en blanco -->
+            <div id="camera-placeholder" class="camera-placeholder">
+                <svg class="icon-placeholder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"></path>
+                    <line x1="1" y1="1" x2="23" y2="23"></line>
+                </svg>
+                <span>Cámara apagada</span>
+            </div>
+        </section>
+
+        <!-- Tarjeta de resultado principal: resalta de forma clara la clase ganadora en tiempo real -->
+        <section id="result-banner" class="result-banner" aria-live="polite">
+            <svg class="icon-status" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            <div class="result-info">
+                <span class="result-label">Detección actual</span>
+                <strong id="top-prediction">Esperando inicio...</strong>
+            </div>
+            <span id="top-confidence" class="confidence-pill">--%</span>
+        </section>
+
+        <!-- Mensaje de error oculto por defecto: informa al usuario si falla el permiso de cámara o la red -->
+        <div id="error-box" class="error-box hidden" role="alert"></div>
+
+        <!-- Botón de control único para iniciar o detener la cámara sin recargar la página -->
+        <div class="controls">
+            <button id="toggle-btn" type="button" class="btn-primary" onclick="toggleCamera()">
+                <!-- Icono SVG de reproducción (cambia dinámicamente a Detener cuando está activo) -->
+                <svg id="btn-icon" class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <span id="btn-text">Iniciar Cámara</span>
+            </button>
+        </div>
+
+        <!-- Contenedor de barras de probabilidad detalladas para cada clase del modelo -->
+        <section class="predictions-section">
+            <h2 class="section-title">Probabilidades</h2>
+            <div id="label-container" class="label-container"></div>
+        </section>
+
+    </main>
 
     <script type="text/javascript">
-        // URL de tu modelo
+        // URL de tu modelo publicado en Teachable Machine
         const URL = "https://teachablemachine.withgoogle.com/models/8UbsgjAVd/";
 
-        let model, webcam, labelContainer, maxPredictions;
+        // Intervalo mínimo (en ms) entre predicciones de IA para no saturar la CPU/GPU
+        const PREDICTION_INTERVAL_MS = 120;
+        // Porcentaje mínimo de confianza para considerar una detección clara
+        const CONFIDENCE_THRESHOLD = 0.80;
 
-        async function init() {
-            const modelURL = URL + "model.json";
-            const metadataURL = URL + "metadata.json";
+        let model = null;
+        let webcam = null;
+        let maxPredictions = 0;
 
-            // 1. Cargar modelo y metadatos
-            model = await tmImage.load(modelURL, metadataURL);
-            maxPredictions = model.getTotalClasses();
+        let isRunning = false;
+        let isLoading = false;
+        let isPredicting = false;
+        let animationFrameId = null;
+        let lastPredictionTime = 0;
 
-            // 2. Configurar la webcam
-            const flip = true; // Efecto espejo
-            webcam = new tmImage.Webcam(250, 250, flip);
-            await webcam.setup(); // Solicitar permiso al usuario
-            await webcam.play();
-            window.requestAnimationFrame(loop);
+        // Referencias a los elementos del DOM (guardadas una vez para mayor rendimiento)
+        const toggleBtn = document.getElementById("toggle-btn");
+        const btnText = document.getElementById("btn-text");
+        const btnIcon = document.getElementById("btn-icon");
+        const webcamContainer = document.getElementById("webcam-container");
+        const cameraPlaceholder = document.getElementById("camera-placeholder");
+        const cameraFrame = document.getElementById("camera-frame");
+        const labelContainer = document.getElementById("label-container");
+        const liveBadge = document.getElementById("live-badge");
+        const liveText = document.getElementById("live-text");
+        const topPredictionEl = document.getElementById("top-prediction");
+        const topConfidenceEl = document.getElementById("top-confidence");
+        const resultBanner = document.getElementById("result-banner");
+        const errorBox = document.getElementById("error-box");
 
-            // 3. Montar el video en la pantalla
-            const webcamContainer = document.getElementById("webcam-container");
-            webcamContainer.innerHTML = ""; // Limpiar por si se presiona más de una vez
-            webcamContainer.appendChild(webcam.canvas);
+        // Referencias a las barras de cada clase para actualizar solo texto y ancho sin recrear HTML
+        let barElements = [];
 
-            // 4. Preparar las etiquetas de predicción
-            labelContainer = document.getElementById("label-container");
-            labelContainer.innerHTML = "";
-            for (let i = 0; i < maxPredictions; i++) {
-                labelContainer.appendChild(document.createElement("div"));
+        async function toggleCamera() {
+            if (isLoading) return;
+
+            if (isRunning) {
+                stopCamera();
+            } else {
+                await startCamera();
             }
         }
 
-        async function loop() {
+        async function startCamera() {
+            isLoading = true;
+            hideError();
+            setButtonState("loading");
+
+            try {
+                // 1. Cargar el modelo solo la primera vez (evita descargarlo de nuevo al reiniciar)
+                if (!model) {
+                    const modelURL = URL + "model.json";
+                    const metadataURL = URL + "metadata.json";
+                    model = await tmImage.load(modelURL, metadataURL);
+                    maxPredictions = model.getTotalClasses();
+                }
+
+                // 2. Configurar y encender la cámara web
+                const flip = true;
+                webcam = new tmImage.Webcam(320, 320, flip);
+                await webcam.setup();
+                await webcam.play();
+
+                // 3. Montar el canvas de la cámara y ocultar el placeholder
+                webcamContainer.innerHTML = "";
+                webcamContainer.appendChild(webcam.canvas);
+                cameraPlaceholder.classList.add("hidden");
+
+                // 4. Construir las barras de probabilidad una sola vez
+                buildPredictionBars();
+
+                // 5. Activar estado EN VIVO y lanzar el bucle fluido
+                isRunning = true;
+                lastPredictionTime = 0;
+                liveBadge.classList.add("active");
+                liveText.textContent = "EN VIVO";
+                setButtonState("running");
+
+                animationFrameId = window.requestAnimationFrame(renderLoop);
+            } catch (error) {
+                console.error(error);
+                showError("No se pudo iniciar la cámara o cargar el modelo. Verifica los permisos de cámara e intenta de nuevo.");
+                stopCamera();
+            } finally {
+                isLoading = false;
+            }
+        }
+
+        function stopCamera() {
+            isRunning = false;
+
+            if (animationFrameId) {
+                window.cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+
+            if (webcam) {
+                webcam.stop();
+                webcam = null;
+            }
+
+            webcamContainer.innerHTML = "";
+            cameraPlaceholder.classList.remove("hidden");
+            cameraFrame.classList.remove("confident");
+            resultBanner.classList.remove("confident");
+            liveBadge.classList.remove("active");
+            liveText.textContent = "Inactivo";
+            topPredictionEl.textContent = "Cámara detenida";
+            topConfidenceEl.textContent = "--%";
+            setButtonState("idle");
+        }
+
+        // Bucle de renderizado desacoplado: actualiza el video a 30-60 FPS sin esperar a TensorFlow
+        function renderLoop(timestamp) {
+            if (!isRunning || !webcam) return;
+
             webcam.update();
-            await predict();
-            window.requestAnimationFrame(loop);
+
+            // Solo lanza una predicción si ya pasó el intervalo y no hay otra en curso
+            if (!isPredicting && (timestamp - lastPredictionTime >= PREDICTION_INTERVAL_MS)) {
+                lastPredictionTime = timestamp;
+                runPrediction();
+            }
+
+            animationFrameId = window.requestAnimationFrame(renderLoop);
         }
 
-        async function predict() {
-            const prediction = await model.predict(webcam.canvas);
-            for (let i = 0; i < maxPredictions; i++) {
-                // Muestra el nombre de la clase y el porcentaje (ej. 95%)
-                const percentage = (prediction[i].probability * 100).toFixed(0);
-                labelContainer.childNodes[i].innerHTML = `${prediction[i].className}: ${percentage}%`;
+        // Ejecuta la inferencia de IA de manera asíncrona sin congelar el video
+        async function runPrediction() {
+            if (!isRunning || !model || !webcam) return;
+
+            isPredicting = true;
+            try {
+                const prediction = await model.predict(webcam.canvas);
+
+                let bestClass = prediction[0];
+                for (let i = 0; i < maxPredictions; i++) {
+                    if (prediction[i].probability > bestClass.probability) {
+                        bestClass = prediction[i];
+                    }
+                }
+
+                // Actualizar las barras sin usar innerHTML
+                for (let i = 0; i < maxPredictions; i++) {
+                    const prob = prediction[i].probability;
+                    const percent = Math.round(prob * 100);
+                    const isWinner = prediction[i].className === bestClass.className && prob >= CONFIDENCE_THRESHOLD;
+
+                    barElements[i].name.textContent = prediction[i].className;
+                    barElements[i].percent.textContent = `${percent}%`;
+                    barElements[i].fill.style.width = `${percent}%`;
+                    barElements[i].row.classList.toggle("is-winner", isWinner);
+                }
+
+                // Actualizar el banner principal y el borde reactivo de la cámara
+                const bestPercent = Math.round(bestClass.probability * 100);
+                const isConfident = bestClass.probability >= CONFIDENCE_THRESHOLD;
+
+                topPredictionEl.textContent = isConfident ? bestClass.className : "Analizando...";
+                topConfidenceEl.textContent = `${bestPercent}%`;
+                cameraFrame.classList.toggle("confident", isConfident);
+                resultBanner.classList.toggle("confident", isConfident);
+            } catch (err) {
+                console.error("Error en predicción:", err);
+            } finally {
+                isPredicting = false;
             }
+        }
+
+        function buildPredictionBars() {
+            labelContainer.innerHTML = "";
+            barElements = [];
+
+            for (let i = 0; i < maxPredictions; i++) {
+                const row = document.createElement("div");
+                row.className = "prediction-row";
+
+                const meta = document.createElement("div");
+                meta.className = "prediction-meta";
+
+                const name = document.createElement("span");
+                name.className = "prediction-name";
+                name.textContent = `Clase ${i + 1}`;
+
+                const percent = document.createElement("span");
+                percent.className = "prediction-percent";
+                percent.textContent = "0%";
+
+                const track = document.createElement("div");
+                track.className = "progress-track";
+
+                const fill = document.createElement("div");
+                fill.className = "progress-fill";
+                fill.style.width = "0%";
+
+                meta.appendChild(name);
+                meta.appendChild(percent);
+                track.appendChild(fill);
+                row.appendChild(meta);
+                row.appendChild(track);
+                labelContainer.appendChild(row);
+
+                barElements.push({ row, name, percent, fill });
+            }
+        }
+
+        function setButtonState(state) {
+            if (state === "loading") {
+                toggleBtn.disabled = true;
+                toggleBtn.className = "btn-primary";
+                btnText.textContent = "Cargando modelo...";
+                btnIcon.innerHTML = '<circle cx="12" cy="12" r="9" stroke-dasharray="28" stroke-dashoffset="10"></circle>';
+                btnIcon.classList.add("spin");
+            } else if (state === "running") {
+                toggleBtn.disabled = false;
+                toggleBtn.className = "btn-danger";
+                btnText.textContent = "Detener Cámara";
+                btnIcon.innerHTML = '<rect x="6" y="6" width="12" height="12" rx="2"></rect>';
+                btnIcon.classList.remove("spin");
+            } else {
+                toggleBtn.disabled = false;
+                toggleBtn.className = "btn-primary";
+                btnText.textContent = "Iniciar Cámara";
+                btnIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
+                btnIcon.classList.remove("spin");
+            }
+        }
+
+        function showError(message) {
+            errorBox.textContent = message;
+            errorBox.classList.remove("hidden");
+        }
+
+        function hideError() {
+            errorBox.textContent = "";
+            errorBox.classList.add("hidden");
         }
     </script>
 </body>
