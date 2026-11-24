@@ -1,0 +1,52 @@
+body {
+    font-family: Arial, sans-serif;
+    text-align: center;
+    background-color: #f7f9fa;
+    padding: 30px;
+    margin: 0;
+}
+
+h2 {
+    color: #333;
+}
+
+button {
+    background-color: #4CAF50;
+    color: white;
+    padding: 12px 24px;
+    font-size: 16px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+button:hover {
+    background-color: #45a049;
+}
+
+#webcam-container {
+    margin: 20px auto;
+    display: flex;
+    justify-content: center;
+}
+
+canvas {
+    border-radius: 12px;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+#label-container {
+    max-width: 300px;
+    margin: 0 auto;
+}
+
+#label-container div {
+    background: white;
+    margin: 6px 0;
+    padding: 8px 12px;
+    border-radius: 6px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+    font-weight: bold;
+    font-size: 15px;
+}
